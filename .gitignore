@@ -1,0 +1,8 @@
+*.pyc
+__pycache__/
+**__pycache__/
+log/
+exp/
+wandb/
+save/
+*.out
