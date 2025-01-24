@@ -6,3 +6,4 @@ exp/
 wandb/
 save/
 *.out
+*.pkl

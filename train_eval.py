@@ -6,8 +6,9 @@ import logging
 import numpy as np
 import os
 import wandb 
-
+import copy
 from scipy.special import comb
+from timm.utils import NativeScaler, ModelEma
 
 import torch.nn.functional as F
 
@@ -114,6 +115,41 @@ def sep_loss(protop_centers, L = 12, dis_max = 3, alpha=0.95):
     loss_sep = (F.relu(dis_max - hamming_distance) * mask_diff.float()).sum(-1)
     return loss_sep.mean()
 
+def test_time_training(model, images, label, num_steps=100):
+    base_model = copy.deepcopy(model)
+    
+    base_model.eval()
+    
+    # Example: Enable gradients only for 'layer3' and 'layer4'
+    # Define a list of layer names for which you want to enable gradients
+    layers_to_train = ['add_on_layers', 'cls_tokens_decoder']
+
+    # Iterate over all named parameters
+    for name, param in model.named_parameters():
+        if any(layer in name for layer in layers_to_train):  # Check if the layer name matches
+            param.requires_grad = True  # Enable gradients
+        else:
+            param.requires_grad = False  # Disable gradients
+
+    model.train()
+    
+    images = images.cuda() 
+    label = label.cuda() 
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-5)
+    loss_scaler = NativeScaler()
+    max_norm = 0.1
+
+    for i in tqdm(range(num_steps)):
+        optimizer.zero_grad()
+        logits, vit, hash_feat, frz_cls_tokens, frz_patch_tokens, cls_tokens, patch_tokens, zc = model(images) # cls_tokens is z
+        loss = recon_loss(frz_cls_tokens, cls_tokens) 
+        loss_scaler(loss, optimizer, clip_grad=max_norm,
+                    parameters=model.parameters())
+        print(f"loss: {loss.item()}")   
+    
+    model.eval()
+    return model
+
 
 def train_and_evaluate(model, 
                     data_loader, 
@@ -152,7 +188,7 @@ def train_and_evaluate(model,
         batch_size = samples.shape[0]
 
         with torch.cuda.amp.autocast():
-            if args.resume:
+            if args.resume and args.syn:
                 syn_model.eval()
                 hash_feat, frz_cls_tokens, frz_patch_tokens, cls_tokens, patch_tokens, zc = syn_model(samples)
                 #f_cls = syn_model.cls_tokens_decoder(torch.cat([cls_tokens + torch.randn_like(cls_tokens), zc], dim=1))
@@ -165,26 +201,27 @@ def train_and_evaluate(model,
                 
                 f_cls = exchange_topk_features(cls_tokens, targets, args.unlabeled_nums, k_top=200)   
                 
-                syn_frz_cls_tokens = syn_model.decoder(torch.cat([f_cls.unsqueeze(1), patch_tokens.detach()], dim=1)).reshape(f_cls.shape)
+                syn_frz_cls_tokens = syn_model.decoder(torch.cat([f_cls.unsqueeze(1), patch_tokens], dim=1)).reshape(f_cls.shape)
             
-            if args.resume and (epoch + 1) // 3 == 0:# and (epoch + 1) // 4 != 0:
+            if args.resume and args.syn and (epoch + 1) // 3 == 0:# and (epoch + 1) // 4 != 0:
                 logits, vit, hash_feat, frz_cls_tokens, frz_patch_tokens, cls_tokens, patch_tokens, zc = model(samples, syn_frz_cls_tokens)
                 # targets repeat * 2
             else:
                 logits, vit, hash_feat, frz_cls_tokens, frz_patch_tokens, cls_tokens, patch_tokens, zc = model(samples)
 
             # reconstruction
-            f_cls = model.cls_tokens_decoder(torch.cat([cls_tokens, zc], dim=1))
-            cls_tokens_hat = model.decoder(torch.cat([f_cls.unsqueeze(1), patch_tokens.detach()], dim=1)).reshape(f_cls.shape)
+            f_cls = model.cls_tokens_decoder(torch.cat([cls_tokens, zc], dim=1)) # cls tokens is zs 
+            cls_tokens_hat, patch_tokens_hat = model.decoder(torch.cat([f_cls.unsqueeze(1), patch_tokens.detach()], dim=1))
             cls_recon_loss = recon_loss(frz_cls_tokens, cls_tokens_hat)
+            patch_recon_loss = recon_loss(frz_patch_tokens, patch_tokens_hat)  
             
             cls_distance = 1 - F.cosine_similarity(frz_cls_tokens, cls_tokens_hat, dim=-1) # compute cos distance for evaluate quality 
             
             # recon z from hash
             mean = model.flow(hash_feat)
             std = torch.exp(0.5 * model.logvar)
-            eps = torch.rand_like(std)
-            #eps = torch.zeros_like(std)
+            #eps = torch.rand_like(std)
+            eps = torch.zeros_like(std)
             flow_z = mean + eps * std
             z_recon_loss = recon_loss(cls_tokens, flow_z)
 
@@ -238,16 +275,14 @@ def train_and_evaluate(model,
                 + loss_quan * args.alpha
                 + loss_feature * args.beta
                 #+ zc_ind_loss * args.l_ind
-                # + hash_ind_loss * args.l_ind
+                + hash_ind_loss * args.l_ind
                 + z_recon_loss * 1e-4
                 + hash_recon_loss * 1e-4
                 + y_contrastive_loss
-                #+ sparsity_loss * args.l_spa
+                + sparsity_loss * args.l_spa
             )
             if args.syn is False:
-                loss = loss + cls_recon_loss * args.l_recon
-            # if epoch // 2 == 0:
-            #     loss = loss + cls_recon_loss * args.l_recon
+                loss = loss + cls_recon_loss * args.l_recon / 2 + patch_recon_loss * args.l_recon / 197 * 2
             wandb.log({
                 'loss_protop': loss_protop.item(),
                 'loss_feature': loss_feature.item(),
@@ -256,11 +291,12 @@ def train_and_evaluate(model,
                 'cls_recon_loss': cls_recon_loss.item(),    
                 'sparsity_loss': sparsity_loss.item(),
                 'zc_ind_loss': zc_ind_loss.item(),
-                #'hash_recon_loss': hash_recon_loss.item(),  
+                'hash_recon_loss': hash_recon_loss.item(),  
                 'z_recon_loss': z_recon_loss.item(),  
                 'train_accuracy': train_accuracy,
                 'cls_distance': cls_distance.mean().item(),
                 'y_contrastive_loss': y_contrastive_loss.item(),    
+                'patch_recon_loss': patch_recon_loss.item(),    
                 'lr': optimizer.param_groups[0]["lr"],
             })
             if args.n_intra > 1:
@@ -303,7 +339,7 @@ def train_and_evaluate(model,
     print("Averaged stats:", metric_logger)
 
     _, all_acc_v1, old_acc_v1, new_acc_v1, all_acc_v2, old_acc_v2, new_acc_v2 = \
-        evaluate(test_loader=test_loader_unlabelled, model=model, args=args, centers=hash_centers.cpu().sign(), dis_max=dis_max, epoch=epoch) 
+        evaluate(test_loader=test_loader_unlabelled, model=model, args=args, centers=hash_centers.cpu().sign(), dis_max=dis_max, epoch=epoch, TTT=args.ttt) 
     wandb.log({      
         'all_acc_v1': all_acc_v1,
         'all_acc_v2': all_acc_v2,
@@ -319,10 +355,13 @@ def compute_hamming_distance_list(list1, list2):
     hamming_distance = sum(differences)
     return hamming_distance
 
+def syn_data():
+    pass
+
 best_v1 = 0 
 best_v2 = 0
-@torch.no_grad()
-def evaluate(test_loader, model, args, centers, dis_max, epoch):
+#@torch.no_grad()
+def evaluate(test_loader, model, args, centers, dis_max, epoch, TTT=False):
     global best_v1, best_v2
 
     radius = max(math.floor(dis_max / 2), 1)
@@ -349,97 +388,103 @@ def evaluate(test_loader, model, args, centers, dis_max, epoch):
     for batch_idx, (images, label, _, _) in enumerate(tqdm(test_loader)):
         images = images.cuda() 
         label = label.cuda() 
-        feats, frz_cls_tokens, frz_patch_tokens, cls_tokens, patch_tokens, zc = model(images) # cls_tokens is z
         
-        
-        hash_sign = torch.nn.Tanh()(feats*3)
-        test_loss_quan = (1 - torch.abs(hash_sign)).mean()
-        #print('test_loss_quan:', test_loss_quan)
+        if TTT:
+            base_model = copy.deepcopy(model)   
+            model = test_time_training(model, images, label, num_steps=1)
+        with torch.no_grad():
+            feats, frz_cls_tokens, frz_patch_tokens, cls_tokens, patch_tokens, zc = model(images) # cls_tokens is z
 
-        frz_cls_hat = model.cls_tokens_decoder(torch.cat([cls_tokens, zc], dim=1))
-        frz_cls_h_list.append(F.normalize(frz_cls_tokens).detach().cpu().numpy())
-        frz_cls_hat_list.append(F.normalize(frz_cls_hat).detach().cpu().numpy())
-        z_list.append(F.normalize(torch.cat([cls_tokens, zc], dim=1)).detach().cpu().numpy()) 
-        zs_list.append(F.normalize(cls_tokens).detach().cpu().numpy())  
-        zc_list.append(F.normalize(zc).detach().cpu().numpy())
-        all_feats.append(feats.cpu().numpy())
-        label_lst.append(label.cpu().numpy())   
+            hash_sign = torch.nn.Tanh()(feats*3)
+            test_loss_quan = (1 - torch.abs(hash_sign)).mean()
+            #print('test_loss_quan:', test_loss_quan)
+            frz_cls_hat = model.cls_tokens_decoder(torch.cat([cls_tokens, zc], dim=1))
+            frz_cls_h_list.append(F.normalize(frz_cls_tokens).detach().cpu().numpy())
+            frz_cls_hat_list.append(F.normalize(frz_cls_hat).detach().cpu().numpy())
+            z_list.append(F.normalize(torch.cat([cls_tokens, zc], dim=1)).detach().cpu().numpy()) 
+            zs_list.append(F.normalize(cls_tokens).detach().cpu().numpy())  
+            zc_list.append(F.normalize(zc).detach().cpu().numpy())
+            all_feats.append(feats.cpu().numpy())
+            label_lst.append(label.cpu().numpy())   
 
-        targets = np.append(targets, label.cpu().numpy())
-        mask = np.append(mask, np.array([True if x.item() in range(args.labeled_nums) else False for x in label]))
-    
-    all_feats = np.concatenate(all_feats, axis=0)
-    all_frz_cls_h = np.concatenate(frz_cls_h_list, axis=0) 
-    all_frz_cls_hat = np.concatenate(frz_cls_hat_list, axis=0) 
-    all_z = np.concatenate(z_list, axis=0)  
-    all_zs = np.concatenate(zs_list, axis=0)
-    all_zc = np.concatenate(zc_list, axis=0)
-    all_label = np.concatenate(label_lst, axis=0)
-    if args.eval:
-        if args.zc_dim > 0: 
-            visualize_features(all_zc, targets, os.path.join(args.output_dir, "z_c.png"), seed=42, max_iter=1000)
-        # visualize latent variables
-        draw_class_feature(args.unlabeled_nums, all_feats, targets, os.path.join(args.output_dir, "class_hash"), num_plot_classes=3) 
-        # save all zs to numpy 
-        np.save(os.path.join(args.output_dir, "zs.npy"), all_zs)
-        np.save(os.path.join(args.output_dir, "label.npy"), all_label)      
-        # visualize z
-        visualize_features(all_frz_cls_h, targets, os.path.join(args.output_dir, "cls_tokens.png"), seed=42, max_iter=1000)    
-        visualize_features(all_frz_cls_hat, targets, os.path.join(args.output_dir, "cls_tokens_hat.png"), seed=42, max_iter=1000)   
-        visualize_features(all_z, targets, os.path.join(args.output_dir, "z.png"), seed=42, max_iter=1000)  
-        visualize_features(all_zs, targets, os.path.join(args.output_dir, "zs.png"), seed=42, max_iter=1000)
-    
-    # Hash
-    feats_hash = torch.Tensor(all_feats > 0).float().tolist()
-
-    hash_dict = centers.numpy().tolist()
-
-    # Store the category index corresponding to each feature
-    preds1 = []  
-
-    for feat in feats_hash:
-        found = False
-        # First check if the same category index already exists
-        if feat in hash_dict:
-            # Use the index of that category
-            preds1.append(hash_dict.index(feat))  
-            found = True
+            targets = np.append(targets, label.cpu().numpy())
+            mask = np.append(mask, np.array([True if x.item() in range(args.labeled_nums) else False for x in label]))
             
-        if not found:
-            # If no identical category index is found, then judge based on distance
-            distances = [compute_hamming_distance_list(feat, center) for center in hash_dict]
-            min_distance = min(distances)
-            min_index = distances.index(min_distance)
+        if TTT:
+            model = base_model
+    with torch.no_grad():
+        all_feats = np.concatenate(all_feats, axis=0)
+        all_frz_cls_h = np.concatenate(frz_cls_h_list, axis=0) 
+        all_frz_cls_hat = np.concatenate(frz_cls_hat_list, axis=0) 
+        all_z = np.concatenate(z_list, axis=0)  
+        all_zs = np.concatenate(zs_list, axis=0)
+        all_zc = np.concatenate(zc_list, axis=0)
+        all_label = np.concatenate(label_lst, axis=0)
+        if args.eval:
+            if args.zc_dim > 0: 
+                visualize_features(all_zc, targets, os.path.join(args.output_dir, "z_c.png"), seed=42, max_iter=1000)
+            # visualize latent variables
+            draw_class_feature(args.unlabeled_nums, all_feats, targets, os.path.join(args.output_dir, "class_hash"), num_plot_classes=3) 
+            # save all zs to numpy 
+            np.save(os.path.join(args.output_dir, "zs.npy"), all_zs)
+            np.save(os.path.join(args.output_dir, "label.npy"), all_label)      
+            # visualize z
+            visualize_features(all_frz_cls_h, targets, os.path.join(args.output_dir, "cls_tokens.png"), seed=42, max_iter=1000)    
+            visualize_features(all_frz_cls_hat, targets, os.path.join(args.output_dir, "cls_tokens_hat.png"), seed=42, max_iter=1000)   
+            visualize_features(all_z, targets, os.path.join(args.output_dir, "z.png"), seed=42, max_iter=1000)  
+            visualize_features(all_zs, targets, os.path.join(args.output_dir, "zs.png"), seed=42, max_iter=1000)
+        
+        # Hash
+        feats_hash = torch.Tensor(all_feats > 0).float().tolist()
 
-            if min_distance <= radius:
-                preds1.append(min_index)
+        hash_dict = centers.numpy().tolist()
+
+        # Store the category index corresponding to each feature
+        preds1 = []  
+
+        for feat in feats_hash:
+            found = False
+            # First check if the same category index already exists
+            if feat in hash_dict:
+                # Use the index of that category
+                preds1.append(hash_dict.index(feat))  
                 found = True
+                
+            if not found:
+                # If no identical category index is found, then judge based on distance
+                distances = [compute_hamming_distance_list(feat, center) for center in hash_dict]
+                min_distance = min(distances)
+                min_index = distances.index(min_distance)
 
-        if not found:
-            # If the distance between feat and all existing categories exceeds the Hamming sphere radius, create a new category
-            hash_dict.append(feat) 
-            # Use the index of the new category as the classification result
-            preds1.append(len(hash_dict) - 1)
+                if min_distance <= radius:
+                    preds1.append(min_index)
+                    found = True
 
-    preds1 = np.array(preds1)
+            if not found:
+                # If the distance between feat and all existing categories exceeds the Hamming sphere radius, create a new category
+                hash_dict.append(feat) 
+                # Use the index of the new category as the classification result
+                preds1.append(len(hash_dict) - 1)
 
-    all_acc_v1, old_acc_v1, new_acc_v1 = split_cluster_acc_v1(y_true=targets, y_pred=preds1, mask=mask)
-    logger.info(f'test len(list(set(preds1))): {len(list(set(preds1)))} len(preds): {len(preds1)}')
-    logger.info(f"Evaluate V1: all_acc: {all_acc_v1 * 100:.2f} old_acc: {old_acc_v1 * 100:.2f} new_acc: {new_acc_v1 * 100:.2f}")
+        preds1 = np.array(preds1)
 
-    all_acc_v2, old_acc_v2, new_acc_v2 = split_cluster_acc_v2(y_true=targets, y_pred=preds1, mask=mask)
-    logger.info(f"Evaluate V2: all_acc: {all_acc_v2 * 100:.2f} old_acc: {old_acc_v2 * 100:.2f} new_acc: {new_acc_v2 * 100:.2f}")
-    
-    if best_v1 < all_acc_v1:    
-        best_v1 = all_acc_v1
-    if best_v2 < all_acc_v2:
-        best_v2 = all_acc_v2
-        torch.save(model.state_dict(), os.path.join(args.output_dir, 'checkpoints', f"best_model.pth"))
-        with open(os.path.join(args.output_dir, 'checkpoints', f"description.txt"), 'w') as file:
-            file.write("all_acc_v1: " + str(all_acc_v1) + "\n" + "old_acc_v1: " + str(old_acc_v1) + "\n" + "new_acc_v1: " + str(new_acc_v1) + "\n" + "all_acc_v2: " + str(all_acc_v2) + "\n" + "old_acc_v2: " + str(old_acc_v2) + "\n" + "new_acc_v2: " + str(new_acc_v2) + "\n" + "epoch: " + str(epoch) + "\n")       
-    
-    logger.info(f"Best Evaluate V1: all_acc: {best_v1 * 100:.2f}, Best Evaluate V2: all_acc: {best_v2 * 100:.2f}")    
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, all_acc_v1, old_acc_v1, new_acc_v1, all_acc_v2, old_acc_v2, new_acc_v2
+        all_acc_v1, old_acc_v1, new_acc_v1 = split_cluster_acc_v1(y_true=targets, y_pred=preds1, mask=mask)
+        logger.info(f'test len(list(set(preds1))): {len(list(set(preds1)))} len(preds): {len(preds1)}')
+        logger.info(f"Evaluate V1: all_acc: {all_acc_v1 * 100:.2f} old_acc: {old_acc_v1 * 100:.2f} new_acc: {new_acc_v1 * 100:.2f}")
+
+        all_acc_v2, old_acc_v2, new_acc_v2 = split_cluster_acc_v2(y_true=targets, y_pred=preds1, mask=mask)
+        logger.info(f"Evaluate V2: all_acc: {all_acc_v2 * 100:.2f} old_acc: {old_acc_v2 * 100:.2f} new_acc: {new_acc_v2 * 100:.2f}")
+        
+        if best_v1 < all_acc_v1:    
+            best_v1 = all_acc_v1
+        if best_v2 < all_acc_v2:
+            best_v2 = all_acc_v2
+            torch.save(model.state_dict(), os.path.join(args.output_dir, 'checkpoints', f"best_model.pth"))
+            with open(os.path.join(args.output_dir, 'checkpoints', f"description.txt"), 'w') as file:
+                file.write("all_acc_v1: " + str(all_acc_v1) + "\n" + "old_acc_v1: " + str(old_acc_v1) + "\n" + "new_acc_v1: " + str(new_acc_v1) + "\n" + "all_acc_v2: " + str(all_acc_v2) + "\n" + "old_acc_v2: " + str(old_acc_v2) + "\n" + "new_acc_v2: " + str(new_acc_v2) + "\n" + "epoch: " + str(epoch) + "\n")       
+        
+        logger.info(f"Best Evaluate V1: all_acc: {best_v1 * 100:.2f}, Best Evaluate V2: all_acc: {best_v2 * 100:.2f}")    
+        return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, all_acc_v1, old_acc_v1, new_acc_v1, all_acc_v2, old_acc_v2, new_acc_v2
 
 def evaluate_train_dataset(train_loader, model, args, centers, dis_max, epoch):
     global best_v1, best_v2

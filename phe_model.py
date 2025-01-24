@@ -187,10 +187,10 @@ class PPNet_Normal(nn.Module):
             self.add_on_layers = nn.Sequential(*add_on_layers)
         else:
             self.add_on_layers = nn.Sequential(
-                nn.Linear(first_add_on_layer_in_channels, self.prototype_shape[1]),
+                nn.Linear(first_add_on_layer_in_channels, self.args.zs_dim),
                 nn.GELU()
             )
-
+        #self.recover = nn.Linear(self.prototype_shape[1], self.args.zs_dim)
         if self.use_global:
             self.prototype_vectors_global = nn.Parameter(torch.rand(self.prototype_shape_global),
                                               requires_grad=True)
@@ -208,11 +208,11 @@ class PPNet_Normal(nn.Module):
         self.all_attn_mask = None
         self.teacher_model = None
 
-        # reconstruction
-        self.cls_tokens_decoder = MLPDecoder(input_dim=self.prototype_shape[1] + self.args.zc_dim, output_dim=self.prototype_shape[1])
-        self.decoder = ViTDecoder(embed_dim=self.prototype_shape[1])
-        self.flow = Mlp(hash_code_length, self.prototype_shape[1] * 2, self.prototype_shape[1])
-        self.logvar = nn.Parameter(torch.zeros(self.prototype_shape[1]), requires_grad=True)  
+        # reconstruction cls tokens
+        self.cls_tokens_decoder = MLPDecoder(input_dim=self.args.zs_dim + self.args.zc_dim, output_dim=768)
+        self.decoder = ViTDecoder(embed_dim=768)
+        self.flow = Mlp(hash_code_length, self.args.zs_dim * 2, self.args.zs_dim)
+        self.logvar = nn.Parameter(torch.zeros(self.args.zs_dim), requires_grad=True)  
         # for learning zc
         if self.args.zc_dim > 0:    
             self.zc_encoder = Mlp(self.prototype_shape[1], (self.prototype_shape[1] + self.args.zc_dim) // 2, self.args.zc_dim)     
@@ -230,7 +230,7 @@ class PPNet_Normal(nn.Module):
         if init_weights:
             self._initialize_weights()
 
-        self.hash_head = HASHHead(in_dim=self.prototype_shape[1], code_dim=hash_code_length)
+        self.hash_head = HASHHead(in_dim=self.args.zs_dim, code_dim=hash_code_length)
 
         self.prototypemask = PrototypeMask(p=mask_theta)
 
@@ -296,7 +296,6 @@ class PPNet_Normal(nn.Module):
             return self.prototype_activation_function(distances)
 
     def get_activations(self, tokens, prototype_vectors):
-
         # distance 
         tokens_expanded = F.normalize(tokens, dim=-1)
         prototype_vectors_expanded = F.normalize(prototype_vectors, dim=-1)
@@ -328,7 +327,7 @@ class PPNet_Normal(nn.Module):
                 zc = self.zc_encoder(_cls_tokens)
             else:
                 zc = torch.empty(x.shape[0], 0).to(x.device)
-            
+                
             hash_feat = self.hash_head(cls_tokens)
             
             global_activations, _ = self.get_activations(cls_tokens, self.prototype_vectors_global)

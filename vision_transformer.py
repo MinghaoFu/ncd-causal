@@ -305,6 +305,5 @@ class ViTDecoder(nn.Module):
 
     def forward(self, x):
         x = self.block(x)
-        x = self.norm(x)
-        x = x.mean(dim=1) # project to cls tokens
-        return x
+        #x = x.mean(dim=1) # project to cls tokens
+        return self.norm(x.mean(dim=1)), self.norm(x[:, 1:]) # return cls tokens and patch tokens

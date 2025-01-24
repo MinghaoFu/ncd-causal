@@ -97,6 +97,8 @@ def get_args_parser():
     parser.add_argument('--y_embed_dim', default=128, type=int, help='')
     # zs = 768, zc = 128
     parser.add_argument('--zc_dim', default=128, type=int, help='dimension of invariant latent semantics')
+    parser.add_argument('--zs_dim', default=768, type=int, help='dimension of changing latent semantics')
+    parser.add_argument('--ttt', action='store_true', help='')
     parser.add_argument('--l_recon', default=1e-4, type=float, help='')
     parser.add_argument('--l_spa', default=1e-4, type=float, help='')
     parser.add_argument('--l_ind', default=1e-4, type=float, help='')
@@ -113,7 +115,6 @@ def get_args_parser():
     parser.add_argument('--n_recon_epoch', default=100, type=int, help='')  
     parser.add_argument('--eval_train', action='store_true', help='Perform evaluation only on training data')
     
-
     # lr reconstruction, flow
     # flow
     # remove zc
@@ -376,6 +377,8 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('PHE training', parents=[get_args_parser()])
     args = parser.parse_args()
+    # preprocess
+    args.prototype_dim = args.zs_dim
 
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)

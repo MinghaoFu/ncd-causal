@@ -3,7 +3,7 @@ nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | awk -v gp
 data_set=cub
 seed=1026
 output_dir=exp/
-#run_name="cub_seed($seed)_syn_iter2old"
+#run_name="cub_seed($seed)_zs1024_patchrecon_div2"
 run_name=test
 CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | sort -t ',' -k2 -n | head -n 1 | awk -F ',' '{print $1}') python main.py \
     --data_set=$data_set \
@@ -11,7 +11,7 @@ CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noh
     --seed=$seed \
     --num_workers 20 \
     --l_recon 1 \
-    --l_spa 1e-2 \
+    --l_spa 0 \
     --l_intra 1e-2 \
     --epochs 400 \
     --n_intra 1 \
@@ -20,6 +20,10 @@ CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noh
     --hash_code_length 32 \
     --l_ind 1e-2 \
     --zc_dim 0 \
-    --syn \
-    --resume "/home/xinyu.li/minghao.fu/xinyu-ncd/exp/cub/cub_seed(1026)_pretrained_from_recon1_synthetic/checkpoints/best_model.pth" 
+    --zs_dim 3072 \
+    --eval \
+    --resume "/home/xinyu.li/minghao.fu/xinyu-ncd/exp/cub/cub_seed(1026)_zs3072_sparsity5e-2/checkpoints/best_model.pth"
     #--resume "/home/xinyu.li/minghao.fu/xinyu-ncd/exp/cub/cub_seed(1026)_recon1/checkpoints/best_model.pth" 
+    #--resume "/home/xinyu.li/minghao.fu/xinyu-ncd/exp/cub/cub_seed(1026)_pretrained_from_recon1_synthetic/checkpoints/best_model.pth" 
+    
+    
