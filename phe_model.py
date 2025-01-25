@@ -215,7 +215,7 @@ class PPNet_Normal(nn.Module):
         self.logvar = nn.Parameter(torch.zeros(self.args.zs_dim), requires_grad=True)  
         # for learning zc
         if self.args.zc_dim > 0:    
-            self.zc_encoder = Mlp(self.prototype_shape[1], (self.prototype_shape[1] + self.args.zc_dim) // 2, self.args.zc_dim)     
+            self.zc_encoder = Mlp(768, (self.prototype_shape[1] + self.args.zc_dim) // 2, self.args.zc_dim)     
 
         # hash to z flow
         self.hash_flows = nn.ModuleList([Mlp(2, 4, 1) for _ in range(hash_code_length)]) 
@@ -323,6 +323,7 @@ class PPNet_Normal(nn.Module):
             _cls_tokens, patch_tokens, frz_cls_tokens, frz_patch_tokens = self.features.forward_all(x)
             
             cls_tokens = self.add_on_layers(_cls_tokens)
+            # cls_tokens = nn.ReLU()(cls_tokens)  
             if self.args.zc_dim > 0:
                 zc = self.zc_encoder(_cls_tokens)
             else:
@@ -343,6 +344,7 @@ class PPNet_Normal(nn.Module):
         _cls_tokens, patch_tokens = self.features.forward_last_block(x)
         
         cls_tokens = self.add_on_layers(_cls_tokens)
+        # cls_tokens = nn.ReLU()(cls_tokens)  
         if self.args.zc_dim > 0:
             zc = self.zc_encoder(_cls_tokens) 
         else:

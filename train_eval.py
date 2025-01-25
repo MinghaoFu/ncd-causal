@@ -42,6 +42,9 @@ def recon_loss(x, x_recon, distribution='gaussian'):
     elif distribution == 'sigmoid_gaussian':
         x_recon = F.sigmoid(x_recon)
         recon_loss = F.mse_loss(x_recon, x, reduction='sum').div(batch_size)
+    
+    elif distribution == 'l1':
+        recon_loss = F.l1_loss(x_recon, x, reduction='sum').div(batch_size) 
 
     return recon_loss
 
@@ -150,7 +153,6 @@ def test_time_training(model, images, label, num_steps=100):
     model.eval()
     return model
 
-
 def train_and_evaluate(model, 
                     data_loader, 
                     test_loader_unlabelled, 
@@ -213,6 +215,7 @@ def train_and_evaluate(model,
             f_cls = model.cls_tokens_decoder(torch.cat([cls_tokens, zc], dim=1)) # cls tokens is zs 
             cls_tokens_hat, patch_tokens_hat = model.decoder(torch.cat([f_cls.unsqueeze(1), patch_tokens.detach()], dim=1))
             cls_recon_loss = recon_loss(frz_cls_tokens, cls_tokens_hat)
+            cls_l1_recon_loss = recon_loss(frz_cls_tokens, cls_tokens_hat, distribution='l1')   
             patch_recon_loss = recon_loss(frz_patch_tokens, patch_tokens_hat)  
             
             cls_distance = 1 - F.cosine_similarity(frz_cls_tokens, cls_tokens_hat, dim=-1) # compute cos distance for evaluate quality 
@@ -282,7 +285,7 @@ def train_and_evaluate(model,
                 + sparsity_loss * args.l_spa
             )
             if args.syn is False:
-                loss = loss + cls_recon_loss * args.l_recon / 2 + patch_recon_loss * args.l_recon / 197 * 2
+                loss = loss + cls_recon_loss * args.l_recon + cls_l1_recon_loss.detach().mean()/cls_recon_loss.detach().mean() * cls_l1_recon_loss * args.l_recon # / 2 + patch_recon_loss * args.l_recon / 197 * 2
             wandb.log({
                 'loss_protop': loss_protop.item(),
                 'loss_feature': loss_feature.item(),

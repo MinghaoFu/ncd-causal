@@ -7,3 +7,4 @@ wandb/
 save/
 *.out
 *.pkl
+*.npy
