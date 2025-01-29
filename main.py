@@ -11,10 +11,11 @@ from timm.utils import NativeScaler, ModelEma
 from phe_model import construct_PPNet_dino
 from train_eval import train_and_evaluate, evaluate, evaluate_train_dataset
 from data.datasets import build_dataset
-from utils import create_optimizer, create_scheduler, get_logger, load_checkpoint_for_ema, str2bool, get_dis_max
+from utils import create_optimizer, create_scheduler, get_logger, load_checkpoint_for_ema, str2bool, get_dis_max, process_dataset
 
 from config import pretrain_path, oxford_pet_root, cub_root, car_root, food_101_root, inaturalist_root
 
+from typing import Literal
 import os
 import wandb  # Add wandb import
 os.environ["WANDB_SILENT"] = "true"
@@ -109,7 +110,10 @@ def get_args_parser():
     parser.add_argument('--temperature', default=1, type=float, help='')
     
     parser.add_argument('--syn', action='store_true', help='')
+    parser.add_argument('--syn_dir', default='./syn', type=str, help='')
 
+    parser.add_argument('--syn_resume', default='', help='resume from checkpoint for syn model')
+    
     parser.add_argument('--recon_attn', action='store_true', help='')
     parser.add_argument('--recon_cls', action='store_true', help='')
     parser.add_argument('--n_recon_epoch', default=100, type=int, help='')  
@@ -204,6 +208,9 @@ def main(args):
         shuffle=False, 
         pin_memory=False)
     
+    
+    
+    
     args.prototype_shape=[args.labeled_nums * args.global_proto_per_class, args.prototype_dim, 1, 1]
 
     model = construct_PPNet_dino(args, img_size=args.img_size,
@@ -272,30 +279,39 @@ def main(args):
         #model_without_ddp.load_state_dict(checkpoint['model'])
         model_without_ddp.load_state_dict(checkpoint)
 
-        submodules_to_freeze = [model_without_ddp.add_on_layers, model_without_ddp.features, model_without_ddp.decoder, model_without_ddp.cls_tokens_decoder]
-        for submodule in submodules_to_freeze:
-            for param in submodule.parameters():
-                param.requires_grad = False
+        # submodules_to_freeze = [model_without_ddp.add_on_layers, model_without_ddp.features, model_without_ddp.decoder, model_without_ddp.cls_tokens_decoder]
+        # for submodule in submodules_to_freeze:
+        #     for param in submodule.parameters():
+        #         param.requires_grad = False
         # for name, param in model.named_parameters():
         #     print(f"{name}: requires_grad={param.requires_grad}")
         
-        if args.syn:
-            syn_model = construct_PPNet_dino(args, img_size=args.img_size,
-                                prototype_shape=args.prototype_shape,
-                                num_classes=args.labeled_nums,
-                                use_global=args.use_global,
-                                global_proto_per_class=args.global_proto_per_class,
-                                prototype_activation_function=args.prototype_activation_function,
-                                add_on_layers_type=args.add_on_layers_type,
-                                mask_theta=args.mask_theta,
-                                pretrain_path=args.pretrain_path,
-                                hash_code_length=args.hash_code_length)
-            syn_model_without_ddp = model
-            syn_model_without_ddp.load_state_dict(checkpoint)
-            syn_model = syn_model.to(device)
-            for param in syn_model.parameters():
-                param.requires_grad = False 
-
+    if args.syn:
+        checkpoint = torch.load(args.syn_resume, map_location='cpu')
+        #model_without_ddp.load_state_dict(checkpoint['model'])
+                
+        syn_model = construct_PPNet_dino(args, img_size=args.img_size,
+                            prototype_shape=args.prototype_shape,
+                            num_classes=args.labeled_nums,
+                            use_global=args.use_global,
+                            global_proto_per_class=args.global_proto_per_class,
+                            prototype_activation_function=args.prototype_activation_function,
+                            add_on_layers_type=args.add_on_layers_type,
+                            mask_theta=args.mask_theta,
+                            pretrain_path=args.pretrain_path,
+                            hash_code_length=args.hash_code_length)
+        syn_model_without_ddp = syn_model
+        syn_model_without_ddp.load_state_dict(checkpoint)
+        syn_model = syn_model.to(device)
+        for param in syn_model.parameters():
+            param.requires_grad = False 
+            
+        syn_model.eval()
+        
+        syn_zs, syn_y = process_dataset(syn_model, data_loader_train, batch_size=32, device='cuda') 
+        syn_zs = syn_zs.to(device)  
+        syn_y = syn_y.to(device)
+        
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
@@ -347,7 +363,9 @@ def main(args):
                                         model_ema=model_ema,
                                         args=args,
                                         set_training_mode=True,
-                                        syn_model=syn_model if args.syn else None)
+                                        syn_model=syn_model if args.syn else None,
+                                        syn_zs=syn_zs if args.syn else None, 
+                                        syn_y=syn_y if args.syn else None,)
         logger.info("Averaged stats:")
         logger.info(train_stats)
         __global_values__["it"] += len(data_loader_train)
@@ -405,3 +423,5 @@ if __name__ == '__main__':
     args.pretrain_path = pretrain_path
 
     main(args)
+    
+    

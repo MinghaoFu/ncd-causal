@@ -15,10 +15,13 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import logging
-from typing import Optional
+from typing import Optional, Literal
+from tqdm import tqdm
+import random
 
 # import torch.nn as nn
 from torch.autograd import Variable
+
 import numpy as np
 
 import argparse
@@ -463,7 +466,6 @@ class supervised_contrastive_loss(nn.Module):
         """
         super(supervised_contrastive_loss, self).__init__()
         self.temperature = args.temperature
-        print(self.temperature)
 
     def forward(self, projections, targets):
         """
@@ -489,3 +491,119 @@ class supervised_contrastive_loss(nn.Module):
         supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
 
         return supervised_contrastive_loss
+    
+def process_dataset(model, data_loader_train, batch_size=32, device='cuda'):
+    model.eval()  # Set model to evaluation mode
+
+    results = []
+    all_labels = []
+
+    with torch.no_grad():  # Disable gradient computation for inference
+        for data, labels, _, ind in data_loader_train:
+            data = data.to(device)
+            labels = labels.to(device)
+
+            # Forward pass
+            _cls_tokens, patch_tokens, frz_cls_tokens, frz_patch_tokens = model.features.forward_all(data)
+            
+            cls_tokens = model.add_on_layers(_cls_tokens)
+            
+            results.append(cls_tokens.cpu())  # Move results to CPU
+            all_labels.append(labels.cpu())  # Move labels to CPU
+
+    # Concatenate all results and labels
+    zs = torch.cat(results, dim=0)  # Shape: (n_samples, dim)
+    y = torch.cat(all_labels, dim=0)  # Shape: (n_samples,)
+    
+    syn_zs, syn_y = synthesis_novel(zs, y, method='category', swap_method='a', sampling_method='high', n_sample_classes=10000, k_top=256) 
+    return syn_zs, syn_y    
+    
+    
+def synthesis_novel(features,
+                    labels,
+                    method: Literal['instance', 'category'] = 'instance',
+                    swap_method: Literal['a', 'b'] = 'a',
+                    sampling_method: Literal['high', 'low', 'random'] = 'random',
+                    n_sample_classes: int = 10000,
+                    k_top:int =200):
+    ### read data from files
+    num_classes = len(np.unique(labels))
+    num_samples = len(features)
+    
+    ori_features = features.clone().detach()
+    mu_f = [features[labels==c].mean(0) for c in range(num_classes)]
+    std_f = [features[labels==c].std(0) for c in range(num_classes)]
+    
+    topk_ind = torch.stack([mu.topk(k=k_top).indices for mu in mu_f], dim=0)
+    topk_val = torch.stack([mu.topk(k=k_top).values for mu in mu_f], dim=0)
+
+    #region compute topk overlapping
+    num_classes, K = topk_ind.shape
+    overlap_ratio = torch.zeros((num_classes, num_classes))
+    
+    for i in range(num_classes):
+        for j in range(num_classes):
+            intersection = len(set(topk_ind[i].tolist()) & set(topk_ind[j].tolist()))
+            overlap_ratio[i, j] = intersection / K
+
+    overlap_ratio.fill_diagonal_(0)
+    conf_ind_top = overlap_ratio.topk(3).indices
+    conf_ind_low = (-overlap_ratio).topk(3).indices
+    #endregion
+        
+    mixed_features = torch.zeros([ori_features.size(0), num_classes, ori_features.size(1)]) ### output mixing feature: samples (class A) x classes B x dimensions
+    
+    for i in tqdm(range(ori_features.size(0))):
+        line = ori_features[i].clone()
+        class_a = labels[i]
+        for class_b in range(num_classes):
+            if method == 'instance':
+                class_mask = torch.where(labels == class_b)
+                sample_b = random.choice(class_mask[0]).item()
+                feat_b = ori_features[sample_b]
+            elif method == 'category':
+                feat_b = mu_f[class_b]
+            else:
+                raise NotImplementedError()
+            replace_ind = topk_ind[class_a if swap_method == 'a' else class_b]
+            line[replace_ind] = feat_b[replace_ind]
+            mixed_features[i, class_b] = line
+
+    random_classes = np.random.choice(np.unique(labels), size=min(n_sample_classes, num_classes), replace=False)
+    mask = np.isin(labels, random_classes)
+    filtered_features = mixed_features[mask]
+    filtered_labels = labels[mask]
+    filtered_conf_ind_top = conf_ind_top[filtered_labels]
+    filtered_conf_ind_low = conf_ind_low[filtered_labels]
+    
+    if sampling_method == 'high':
+        ### design 1: high topk overlapping
+        select_mixing_features = \
+            filtered_features[
+            torch.arange(filtered_features.size(0)), 
+            filtered_conf_ind_top[:, 0]]
+    elif sampling_method == 'low':
+        ### design 2: low topk overlapping
+        select_mixing_features = \
+            filtered_features[
+            torch.arange(filtered_features.size(0)), 
+            filtered_conf_ind_low[:, 1]]
+    elif sampling_method == 'random':
+        ### design 3: random
+        random_mixing_labels = torch.zeros_like(labels)
+        for c in labels.unique():
+            class_mask = torch.where(labels==c)
+            while 1:
+                rand_class = torch.randint(low=0, high=num_classes, size=[1])
+                if rand_class != c:
+                    break
+            random_mixing_labels[class_mask] = rand_class.item()
+        select_mixing_features = \
+            filtered_features[
+            torch.arange(filtered_features.size(0)), 
+            random_mixing_labels[mask]]
+
+    # features_2d = visualize_reduction([
+    #     filtered_features[:, 0], select_mixing_features], labels=filtered_labels, method='tsne')
+    return select_mixing_features, filtered_labels
+    

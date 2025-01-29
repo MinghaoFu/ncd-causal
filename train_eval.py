@@ -162,7 +162,9 @@ def train_and_evaluate(model,
                     model_ema, 
                     args=None, 
                     set_training_mode=True,
-                    syn_model=None):
+                    syn_model=None,
+                    syn_zs=None,
+                    syn_y=None):
 
     wandb.login(key='792a3b819c6b832d0087bd4905542a95c7236076')  # Add wandb login
     wandb.init(name=args.output_dir)
@@ -190,7 +192,7 @@ def train_and_evaluate(model,
         batch_size = samples.shape[0]
 
         with torch.cuda.amp.autocast():
-            if args.resume and args.syn:
+            if args.resume and args.syn and (epoch + 1) // 3 == 0:# and (epoch + 1) // 4 != 0:
                 syn_model.eval()
                 hash_feat, frz_cls_tokens, frz_patch_tokens, cls_tokens, patch_tokens, zc = syn_model(samples)
                 #f_cls = syn_model.cls_tokens_decoder(torch.cat([cls_tokens + torch.randn_like(cls_tokens), zc], dim=1))
@@ -200,12 +202,11 @@ def train_and_evaluate(model,
                 # mask.scatter_(1, topk_indices, False)
                 # cls_tokens = cls_tokens * mask.float()
                 # f_cls = syn_model.cls_tokens_decoder(torch.cat([cls_tokens, zc], dim=1))
+                cls_tokens, targets = syn_zs[ind], syn_y[ind]
+                f_cls = syn_model.cls_tokens_decoder(torch.cat([cls_tokens, zc], dim=1))
                 
-                f_cls = exchange_topk_features(cls_tokens, targets, args.unlabeled_nums, k_top=200)   
-                
-                syn_frz_cls_tokens = syn_model.decoder(torch.cat([f_cls.unsqueeze(1), patch_tokens], dim=1)).reshape(f_cls.shape)
+                syn_frz_cls_tokens, syn_patch_tokens_hat = syn_model.decoder(torch.cat([f_cls.unsqueeze(1), patch_tokens], dim=1))
             
-            if args.resume and args.syn and (epoch + 1) // 3 == 0:# and (epoch + 1) // 4 != 0:
                 logits, vit, hash_feat, frz_cls_tokens, frz_patch_tokens, cls_tokens, patch_tokens, zc = model(samples, syn_frz_cls_tokens)
                 # targets repeat * 2
             else:
@@ -213,7 +214,7 @@ def train_and_evaluate(model,
 
             # reconstruction
             f_cls = model.cls_tokens_decoder(torch.cat([cls_tokens, zc], dim=1)) # cls tokens is zs 
-            cls_tokens_hat, patch_tokens_hat = model.decoder(torch.cat([f_cls.unsqueeze(1), patch_tokens.detach()], dim=1))
+            cls_tokens_hat, patch_tokens_hat = model.decoder(torch.cat([f_cls.unsqueeze(1), patch_tokens], dim=1))
             cls_recon_loss = recon_loss(frz_cls_tokens, cls_tokens_hat)
             cls_l1_recon_loss = recon_loss(frz_cls_tokens, cls_tokens_hat, distribution='l1')   
             patch_recon_loss = recon_loss(frz_patch_tokens, patch_tokens_hat)  
@@ -239,6 +240,8 @@ def train_and_evaluate(model,
 
             # Sparsity loss on latent variable z
             sparsity_loss = torch.mean(torch.abs(cls_tokens))
+            
+            d_spa_loss = torch.mean(torch.abs(hash_feat))   
 
             # independence
             zc_ind_loss = compute_independence_loss(zc)
@@ -283,16 +286,18 @@ def train_and_evaluate(model,
                 + hash_recon_loss * 1e-4
                 + y_contrastive_loss
                 + sparsity_loss * args.l_spa
+                #+ d_spa_loss * args.l_spa
             )
             if args.syn is False:
-                loss = loss + cls_recon_loss * args.l_recon + cls_l1_recon_loss.detach().mean()/cls_recon_loss.detach().mean() * cls_l1_recon_loss * args.l_recon # / 2 + patch_recon_loss * args.l_recon / 197 * 2
+                loss = loss + cls_recon_loss * args.l_recon #+ cls_l1_recon_loss.detach().mean()/cls_recon_loss.detach().mean() * cls_l1_recon_loss * args.l_recon # / 2 + patch_recon_loss * args.l_recon / 197 * 2
             wandb.log({
                 'loss_protop': loss_protop.item(),
                 'loss_feature': loss_feature.item(),
                 'loss_sep': loss_sep.item(),
                 'loss_quan': loss_quan.item(),
                 'cls_recon_loss': cls_recon_loss.item(),    
-                'sparsity_loss': sparsity_loss.item(),
+                'z_spa_loss': sparsity_loss.item(),
+                'd_spa_loss': d_spa_loss.item(),    
                 'zc_ind_loss': zc_ind_loss.item(),
                 'hash_recon_loss': hash_recon_loss.item(),  
                 'z_recon_loss': z_recon_loss.item(),  
@@ -325,7 +330,8 @@ def train_and_evaluate(model,
         metric_logger.update(loss_feature=loss_feature.item())
         metric_logger.update(loss_sep=loss_sep.item())        
         metric_logger.update(loss_quan=loss_quan.item())
-        metric_logger.update(sparsity_loss=sparsity_loss.item())
+        metric_logger.update(z_spa_loss=sparsity_loss.item())
+        metric_logger.update(d_spa_loss=d_spa_loss.item())  
         metric_logger.update(zc_ind_loss=zc_ind_loss.item())
         metric_logger.update(z_recon_loss=z_recon_loss.item())
         metric_logger.update(cls_recon_loss=cls_recon_loss.item())

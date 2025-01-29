@@ -102,29 +102,6 @@ class CustomCub2011(Dataset):
             target = self.target_transform(target)
     
         return img, target, self.uq_idxs[idx], idx
-    # Ours
-    # def augment(self, mean, std):
-    #     """
-    #     Creates a MultiTransform instance for data augmentation with multiviews.
-    #     """
-    #     # Define large crop transforms
-    #     large_crop_transform = transforms.Compose([
-    #         transforms.RandomResizedCrop(size=224),
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.ToTensor(),
-    #         transforms.Normalize(mean=mean, std=std)
-    #     ])
-
-    #     # Define small crop transforms if multicrop is enabled
-    #     small_crop_transform = self.transform
-
-    #     # Combine large and small crops
-    #     transform_list = [large_crop_transform] * self.num_large_crops
-    #     if self.multicrop and small_crop_transform:
-    #         transform_list += [small_crop_transform] * self.num_small_crops
-
-    #     MultiTransform(transform_list)
-    
 
 def subsample_instances(dataset, prop_indices_to_subsample=0.8):
 

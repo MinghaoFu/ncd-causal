@@ -26,4 +26,3 @@ CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noh
     #--resume "/home/xinyu.li/minghao.fu/xinyu-ncd/exp/cub/cub_seed(1026)_recon1/checkpoints/best_model.pth" 
     #--resume "/home/xinyu.li/minghao.fu/xinyu-ncd/exp/cub/cub_seed(1026)_pretrained_from_recon1_synthetic/checkpoints/best_model.pth" 
     
-    
