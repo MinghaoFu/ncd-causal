@@ -2,10 +2,11 @@
 data_set=pets
 seed=1029
 output_dir=exp/
-run_name="pets_seed($seed)_zs3072_zc1024_spa5e-2"
+known_scale=0.8
+run_name="pets_seed($seed)_zs3072_zc32_${known_scale}"
 #run_name=test
 
-CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | awk -F ',' '{if ($1 >= 0 && $1 <= 3) print $0}' | sort -t ',' -k2 -n | head -n 1 | awk -F ',' '{print $1}') python main.py \
+CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | sort -t ',' -k2 -n | head -n 1 | awk -F ',' '{print $1}') python main.py \
     --data_set=$data_set \
     --output_dir=$output_dir/$data_set/${run_name} \
     --seed=$seed \
@@ -19,6 +20,6 @@ CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noh
     --n_recon_epoch 200 \
     --hash_code_length 32 \
     --l_ind 1e-2 \
-    --zc_dim 1024 \
+    --zc_dim 32 \
     --zs_dim 3072 \
-    
+    --prop_train_labels ${known_scale} \

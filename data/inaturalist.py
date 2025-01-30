@@ -143,7 +143,8 @@ def get_inaturalist_datasets(train_transform,
     np.random.seed(seed)
 
     # Init entire training set
-    whole_training_set = INaturalist_SUB(root=data_root.inaturalist_root, subclassname=subclassname, transform=train_transform)
+    #whole_training_set = INaturalist_SUB(root=data_root.inaturalist_root, subclassname=subclassname, transform=train_transform)
+    whole_training_set = INaturalist_SUB(root=data_root, subclassname=subclassname, transform=train_transform)
 
     # Get labelled training set which has subsampled classes, then subsample some indices from that
     train_dataset_labelled = subsample_classes(deepcopy(whole_training_set), include_classes=train_classes)
@@ -161,7 +162,8 @@ def get_inaturalist_datasets(train_transform,
     train_dataset_unlabelled = subsample_dataset(deepcopy(whole_training_set), np.array(list(unlabelled_indices)))
 
     # Get test set for all classes
-    whole_test_dataset = INaturalist_SUB(root=data_root.inaturalist_root, subclassname=subclassname, transform=test_transform)
+    #whole_test_dataset = INaturalist_SUB(root=data_root.inaturalist_root, subclassname=subclassname, transform=test_transform)
+    whole_test_dataset = INaturalist_SUB(root=data_root, subclassname=subclassname, transform=test_transform)
     test_dataset = subsample_classes(deepcopy(whole_test_dataset), include_classes=train_classes)
 
     # Either split train into train and val or use test set as val

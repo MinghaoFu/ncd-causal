@@ -118,7 +118,7 @@ def get_args_parser():
     parser.add_argument('--recon_cls', action='store_true', help='')
     parser.add_argument('--n_recon_epoch', default=100, type=int, help='')  
     parser.add_argument('--eval_train', action='store_true', help='Perform evaluation only on training data')
-    
+    parser.add_argument('--known_scale', default=0.5, type=float, help='') 
     # lr reconstruction, flow
     # flow
     # remove zc

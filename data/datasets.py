@@ -1,5 +1,6 @@
 import pickle
 import torch
+import math
 
 from torchvision import transforms
 from data.cub import get_cub_datasets
@@ -61,9 +62,10 @@ def build_dataset(args):
 
         unlabelled_train_examples_test = deepcopy(train_dataset_unlabelled)
         unlabelled_train_examples_test.transform = test_transform
-        args.labeled_nums=100
+        
         args.unlabeled_nums=200
-
+        args.labeled_nums=100
+        
         return train_dataset, test_dataset, unlabelled_train_examples_test
 
     elif args.data_set == 'food':
@@ -73,8 +75,9 @@ def build_dataset(args):
 
         unlabelled_train_examples_test = deepcopy(train_dataset_unlabelled)
         unlabelled_train_examples_test.transform = test_transform
-        args.labeled_nums=51
+        
         args.unlabeled_nums=101
+        args.labeled_nums=51
 
         return train_dataset, test_dataset, unlabelled_train_examples_test
 
@@ -85,8 +88,9 @@ def build_dataset(args):
 
         unlabelled_train_examples_test = deepcopy(train_dataset_unlabelled)
         unlabelled_train_examples_test.transform = test_transform
-        args.labeled_nums=19
+
         args.unlabeled_nums=38
+        args.labeled_nums=19
 
         return train_dataset, test_dataset, unlabelled_train_examples_test
 
@@ -97,8 +101,9 @@ def build_dataset(args):
 
         unlabelled_train_examples_test = deepcopy(train_dataset_unlabelled)
         unlabelled_train_examples_test.transform = test_transform
-        args.labeled_nums=39
+        
         args.unlabeled_nums=77
+        args.labeled_nums=39
 
         return train_dataset, test_dataset, unlabelled_train_examples_test
 

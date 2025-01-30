@@ -3,7 +3,7 @@ nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | awk -v gp
 data_set=Fungi
 seed=1026
 output_dir=exp/
-run_name="${daset_set}_seed($seed)_zs3072_l1recon"
+run_name="${daset_set}_seed($seed)_zs3072"
 #run_name=test
 CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | awk -F ',' '{if ($1 >= 0 && $1 <= 3) print $0}' | sort -t ',' -k2 -n | head -n 1 | awk -F ',' '{print $1}') python main.py \
     --data_set=$data_set \
