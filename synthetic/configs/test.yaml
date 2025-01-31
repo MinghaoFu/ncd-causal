@@ -1,0 +1,90 @@
+#########################
+# Model Configurations  #
+#########################
+
+ROOT: '.'
+SEED: 3
+
+NAME: "d_9_seed_3_data"
+GROUP: "random_data_mean_4_var_1_enc_4_dec_4_h_32_beta_01_gamma_01_lr_2e-3"
+
+DATA: 
+    N_DOMAINS: 9
+    N_COMP: 4
+    N_COMP_S: 2
+    N_LAYERS: 2
+    LINEAR_MIXING_FIRST: TRUE
+    
+    N_TRAIN_SAMPLES_DOMAIN: 10000
+    N_TEST_SAMPLES: 0
+    N_TEST_SAMPLES_DOMAIN: 1000
+    VARY_MEAN: TRUE 
+
+    VAR_RANGE_L: 0.01
+    VAR_RANGE_R: 1
+    MEAN_RANGE_L: -4
+    MEAN_RANGE_R: 4
+
+    MIXTURES: FALSE
+    MIXING_FROM_FLOW: FALSE
+    N_MODES_RANGE_L: 2
+    N_MODES_RANGE_R: 6
+    P_DOMAINS_RANGE_L: 1
+    P_DOMAINS_RANGE_R: 2
+
+    SAVE_ALL_DATASETS: FALSE
+    DATA_PATH: null
+    # DATA_PATH: "./data/all_datasets_9_seed_1_domain_validation_size_10000_mean_4_var_1.pth"
+    TEST_DOMAINS: null
+
+VAE:
+    GPU: [1]
+    CPU: 32
+    TRAIN_BS: 256
+    # VAL_BS: 4096
+    EPOCHS: 100
+    # NCLASS: 5
+    # BETA: 0.005
+    BETA: 0.1
+    GAMMA: 0.1
+    SIGMA: 0.0
+
+    OPTIMIZER: adam
+    LR: 0.002
+    SCHEDULER: null
+    LR_FACTOR: 2
+    LR_PATIENCE: 20
+
+    EMBEDDING_DIM: 0
+
+    SLOPE: 0.2
+    ENC:
+        HIDDEN_DIM: 32
+        N_LAYERS: 4
+    DEC:
+        HIDDEN_DIM: 32
+        N_LAYERS: 4
+        DIST: 'gaussian'
+    PIN: FALSE
+
+
+SPLINE:
+    TYPE: 'gaussian'
+    N_LAYERS: 1
+    STEPS: 5000
+    LR: 0.001
+    CUDA: TRUE
+    BS: 64
+    LATENT_DIM: 2
+    BOUND: 5
+    BINS: 8
+    ORDER: 'linear'
+
+    USE_WARM_START: FALSE
+    PATH: 'ckpts/spline_layer_1.pth'
+
+
+MCC:
+    FREQ: 20
+    CORR: 'Spearman' # 'Spearman'
+    HZ_TO_Z: TRUE
